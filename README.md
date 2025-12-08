@@ -1,3 +1,5 @@
+[中文](#简介) | [English](#overview)
+
 ## 简介
 
 旧版 Shmups GameBuilder（STGBuilder）项目文件的解包与还原工具，用于从 `.gamedat` 归档中提取资源并恢复工程结构。
