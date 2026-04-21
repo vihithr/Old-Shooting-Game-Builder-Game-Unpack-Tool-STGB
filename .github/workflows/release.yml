@@ -50,20 +50,6 @@ jobs:
           "release_name=$releaseName" >> $env:GITHUB_OUTPUT
           "prerelease=$prerelease" >> $env:GITHUB_OUTPUT
 
-      - name: Create git tag for manual release
-        if: github.event_name == 'workflow_dispatch'
-        shell: pwsh
-        run: |
-          $tag = "${{ steps.meta.outputs.tag }}"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if (-not (git rev-parse -q --verify "refs/tags/$tag")) {
-            git tag $tag
-            git push origin $tag
-          } else {
-            Write-Host "Tag $tag already exists, skip creating."
-          }
-
       - name: Setup MSBuild.exe
         uses: microsoft/setup-msbuild@v2
 
@@ -98,6 +84,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           name: ${{ steps.meta.outputs.release_name }}
           prerelease: ${{ steps.meta.outputs.prerelease }}
           generate_release_notes: true
