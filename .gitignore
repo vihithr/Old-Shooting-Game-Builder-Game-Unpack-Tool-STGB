@@ -1,0 +1,32 @@
+# Build outputs
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+AnyCPU/
+
+# Visual Studio / Rider user files
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.DotSettings.user
+
+# NuGet packages (keep lock files if you use them)
+packages/
+*.nupkg
+*.snupkg
+
+# Logs and diagnostics
+*.log
+unpack_diagnose.log
+
+# Runtime unpack output (generated files)
+UnpackData/
+
+# OS files
+Thumbs.db
+Desktop.ini
