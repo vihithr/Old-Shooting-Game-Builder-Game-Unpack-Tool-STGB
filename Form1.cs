@@ -49,34 +49,45 @@ namespace STGBUNPACK_SHARP
                 {
                     file.Seek(8, SeekOrigin.Begin);
                     byte[] the_Byte_Buffer = new byte[4];
-                    byte[] the_Byte_Name_Buffer = new byte[0x10];
                     file.Read(the_Byte_Buffer, 0, 4);
                     data_Count = BitConverter.ToInt32(the_Byte_Buffer, 0);
                     Console.WriteLine(data_Count);
                     SetControlProgressMax(data_Count);
+
+                    // 只改数据结构：整个索引块一次读入内存。
+                    // 原来每个条目要 3 次 Seek + 3 次 Read（长度/偏移/名字），
+                    // 现在只需 1 次顺序读；字段偏移与取值方式完全不变。
+                    int indexBlockSize = data_Count * 0x40;
+                    if (data_Count < 0 || 0x10L + indexBlockSize > file.Length)
+                    {
+                        throw new Exception("索引块超出文件长度");
+                    }
+                    byte[] indexBlock = new byte[indexBlockSize];
                     file.Seek(0x10, SeekOrigin.Begin);
-                    sbdData = get_sbd_file_data(file);     //sbd文件的数据
+                    int indexRead = 0;
+                    while (indexRead < indexBlockSize)
+                    {
+                        int n = file.Read(indexBlock, indexRead, indexBlockSize - indexRead);
+                        if (n <= 0) break;
+                        indexRead += n;
+                    }
+
+                    sbdData = get_sbd_file_data(file, indexBlock);     //sbd文件的数据
 
                     // 编码：将字符串转换为字节序列
                     for (int i = 0; i < data_Count; i++)
                     {
                         currentIndex = i;
-                        int ptr = 0x10 + i * 0x40;
-                        currentPtr = ptr;
+                        int ptr = i * 0x40;                    // 相对索引块（原来为 0x10 + i*0x40）
+                        currentPtr = 0x10 + ptr;
 
-                        file.Seek(ptr + 4, SeekOrigin.Begin);
-                        file.Read(the_Byte_Buffer, 0, 4);
-                        int file_Length = BitConverter.ToInt32(the_Byte_Buffer, 0);
+                        int file_Length = BitConverter.ToInt32(indexBlock, ptr + 4);
                         currentFileLength = file_Length;
 
-                        file.Seek(ptr + 12, SeekOrigin.Begin);
-                        file.Read(the_Byte_Buffer, 0, 4);
-                        int file_addr = BitConverter.ToInt32(the_Byte_Buffer, 0);
+                        int file_addr = BitConverter.ToInt32(indexBlock, ptr + 12);
                         currentFileAddr = file_addr;
 
-                        file.Seek(ptr + 0x30, SeekOrigin.Begin);
-                        file.Read(the_Byte_Name_Buffer, 0, 0x10);
-                        string file_Name = eucJp.GetString(the_Byte_Name_Buffer);
+                        string file_Name = eucJp.GetString(indexBlock, ptr + 0x30, 0x10);
                         currentRawName = file_Name;
 
                         file_Name = search_in_sbdfile(file_Name, ref sbd_file_data_ptr);
@@ -152,20 +163,13 @@ namespace STGBUNPACK_SHARP
             }
         }
 
-        private string get_sbd_file_data(FileStream file)
+        private string get_sbd_file_data(FileStream file, byte[] indexBlock)
         {
-            int ptr = 0x10;
-            byte[] the_Byte_Buffer = new byte[4];
-            byte[] the_Byte_Name_Buffer = new byte[0x10];
-            file.Seek(ptr + 4, SeekOrigin.Begin);
-            file.Read(the_Byte_Buffer, 0, 4);
-            int file_Length = BitConverter.ToInt32(the_Byte_Buffer, 0);
-            file.Seek(ptr + 12, SeekOrigin.Begin);
-            file.Read(the_Byte_Buffer, 0, 4);
-            int file_addr = BitConverter.ToInt32(the_Byte_Buffer, 0);
-            file.Seek(ptr + 0x30, SeekOrigin.Begin);
-            file.Read(the_Byte_Name_Buffer, 0, 0x10);
-            string file_Name = eucJp.GetString(the_Byte_Name_Buffer);
+            // 只改数据来源：原来是 Seek(0x10+4)/Seek(0x10+12) 逐字段读，
+            // 现在直接取内存索引块的同偏移字段（4 / 12），取值方式不变。
+            // 原方法里还读了一次名字但没有使用，这里去掉。
+            int file_Length = BitConverter.ToInt32(indexBlock, 4);
+            int file_addr = BitConverter.ToInt32(indexBlock, 12);
             file.Seek(file_addr, SeekOrigin.Begin);
             byte[] file_Data = new byte[file_Length];
             file.Read(file_Data, 0, file_Length);
@@ -217,6 +221,39 @@ namespace STGBUNPACK_SHARP
                 head_data = head_data.Remove(point, 1);
             }
             string pattern = (head_data+ @"+(.*?\.(bmp|png|mp3|ogg|wav|jpg|midi|sbd|gif|raw|aac|wma))");
+
+            // 只改调用方式：从 sbd_file_ptr 之后继续匹配，不再每个文件都把整个
+            // 字符串表枚举一遍（原写法里 matches.Count 会强制全量枚举）。
+            // 匹配条件、扩展名集合、非法字符过滤、'・' 处理都与原来一致；
+            // 未命中时回退到原来的 Matches 枚举，因此除了"原枚举被跨 NUL 的贪婪
+            // 匹配吞掉候选"这种漏扫外，命名结果与原来完全相同。
+            int scan = sbd_file_ptr + 1;
+            if (scan < 0)
+            {
+                scan = 0;
+            }
+            if (scan < sbdData.Length)
+            {
+                Regex cursorRegex = new Regex(pattern, RegexOptions.IgnoreCase);
+                Match cursorMatch = cursorRegex.Match(sbdData, scan);
+                while (cursorMatch.Success)
+                {
+                    if (cursorMatch.Value.IndexOfAny(Path.GetInvalidPathChars()) < 0)
+                    {
+                        sbd_file_ptr = cursorMatch.Index;
+                        string cursorName = cursorMatch.Value;
+                        if (pointDelete)
+                            if (point > 0)
+                                cursorName = cursorName.Insert(point, "・");
+                        return cursorName;
+                    }
+                    // 推进方式必须与 MatchCollection 枚举器一致（上一个匹配的末尾），
+                    // 用 Index+1 会额外找到"起点落在上一个匹配内部"的匹配。
+                    scan = cursorMatch.Index + cursorMatch.Length;
+                    cursorMatch = (scan < sbdData.Length) ? cursorRegex.Match(sbdData, scan) : Match.Empty;
+                }
+            }
+
             MatchCollection matches = Regex.Matches(sbdData, pattern, RegexOptions.IgnoreCase);
             if (matches.Count == 0)
             {
@@ -246,6 +283,15 @@ namespace STGBUNPACK_SHARP
                 }
             }
 
+            if (file_full_name.Length == 0)
+            {
+                // 修复漏扫造成的丢文件：原实现在"枚举到的匹配全部含非法路径字符"时
+                // 返回空串（其它三个失败分支都是回退头名）。空串会被 save_file 拼成
+                // UnpackData 目录本身、写盘失败后被 catch 转写成 UnpackData\ErrorData.dat，
+                // 多个条目互相覆盖 —— 内容静默丢失。这里统一回退到头名。
+                Console.WriteLine("nomatch"+ oriname + pattern);
+                return oriname;
+            }
             if (pointDelete)
                 if (point > 0)
                     file_full_name = file_full_name.Insert(point, "・");
